@@ -30,7 +30,6 @@ from watchdog.observers import Observer
 # TODOS:
 
 # pip it
-# post it and email to joshua
 # logs
 # some changes are invisible; want to throw these away
 
