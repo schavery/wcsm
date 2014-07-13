@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """
 wcsm stands for Web Change Stop Motion
 This script is designed to watch your directory for file modifications
@@ -14,6 +16,7 @@ MIT license.
 
 import argparse
 import base64
+import cssutils
 import hashlib
 import imghdr
 import os
@@ -27,11 +30,15 @@ from os import path as op
 from watchdog.events import RegexMatchingEventHandler
 from watchdog.observers import Observer
 
+
 # TODOS:
 
-# pip it
+# make sure utf8
+# better docs
+# examples
 # logs
 # some changes are invisible; want to throw these away
+# python-dev on ubuntu
 
 
 # output dir structure
@@ -45,8 +52,25 @@ from watchdog.observers import Observer
 #		...
 
 
+class Http(object):
+	""" manage the http requests """
+	def __init__(self):
+		self.http = urllib3.PoolManager()
+
+	def req(self, uri):
+		htreq = self.http.request('GET', uri)
+		if htreq.status == 200 or htreq.status == 304:
+			return htreq.data
+		else:
+			raise RunTimeError('Net error:\nStatus: ' + htreq.status + '\n' \
+								 + 'Requested URI: ' + uri)
+
+
+
 class WebGetter(object):
-	def __init__(self, options):
+	""" fetch the contents of a url using WebGetter.grab() """
+
+	def __init__(self, options, http):
 		# set up debounce interval in millis
 		# might need fine tuning for different applications
 		self.debounce_interval = 1000
@@ -66,20 +90,27 @@ class WebGetter(object):
 				os.makedirs(outpath)
 
 		# prepare urls for fetching.
-		self.http = urllib3.PoolManager()
-
+		self.http = http
 		for uri in self.urilist:
-			req = self.http.request('GET', uri)
-			if req.status != 200:
-				raise RunTimeError('Net error:\nStatus: ' + req.status + '\n' \
-									 + 'Requested URI: ' + uri)
+			self.http.req(uri)
 
 		# are we good to go now?
 		print 'Ready to watch...'
 
 
+	def debounce(self):
+		""" don't go fetching pages too frequently """
+		self.thistime = int(time.time() * 1000)
+		if (self.thistime - self.lasttime) > self.debounce_interval:
+			self.lasttime = self.thistime
+			return True
+		else:
+			return False
+
+
 	def pathfromuri(self, uri):
 		""" transform the uri into a simple directory name """
+
 		address = urlparse.urlparse(uri)
 		base = address.netloc
 
@@ -94,31 +125,43 @@ class WebGetter(object):
 		return base
 
 
+	def checkhash(self, checkdir, flatcontent):
+		""" returns a boolean that indicates whether the last
+			file saved has the same hash value as the fetched content """
+
+		thishash = hashlib.md5(flatcontent).hexdigest()
+		oldfiles = os.listdir(checkdir)
+		goahead = False
+
+		if len(oldfiles) > 0:
+			oldfiles.sort()
+			mostrecent = oldfiles[-1]
+			fcontents = open(op.normpath(checkdir + '/' + mostrecent), 'r')
+			pasthash = hashlib.md5(fcontents.read()).hexdigest()
+			if pasthash != thishash:
+				goahead = True
+		else:
+			# no files exist yet
+			goahead = True
+
+		return goahead
+
+
 	def grab(self):
+		""" handles the logic of grabbing a webpage
+			and flattening it to a single file,
+			as well as preventing too frequent requests and
+			superfluous output """
+
 		if self.debounce():
 			name = str(time.time()).split('.')[0] + '.html'
 			for uri in self.urilist:
 				basepath = op.normpath(self.outdirname + '/' + self.pathfromuri(uri)  + '/')
 
-				req = self.http.request('GET', uri)
-				flat = str(self.inline(req.data, uri))
+				req = self.http.req(uri)
+				flat = str(Inliner(req, uri, self.http))
 
-				# if the file is exactly the same, don't save it again
-				thishash = hashlib.md5(flat).hexdigest()
-				oldfiles = os.listdir(basepath)
-				goahead = False
-				if len(oldfiles) > 0:
-					oldfiles.sort()
-					mostrecent = oldfiles[-1]
-					fcontents = open(op.normpath(basepath + '/' + mostrecent), 'r')
-					pasthash = hashlib.md5(fcontents.read()).hexdigest()
-					if pasthash != thishash:
-						goahead = True
-				else:
-					# no files exist yet
-					goahead = True
-
-				if goahead:
+				if self.checkhash(basepath, flat):
 					uridir = self.pathfromuri(uri)
 					path = self.outdirname + '/' + uridir + '/' + name
 					fhandle = open(op.normpath(path), 'w')
@@ -126,25 +169,48 @@ class WebGetter(object):
 					fhandle.close()
 
 
-	def debounce(self):
-		"""don't go fetching pages too frequently"""
-		self.thistime = int(time.time() * 1000)
-		if (self.thistime - self.lasttime) > self.debounce_interval:
-			self.lasttime = self.thistime
-			return True
-		else:
-			return False
+
+class Inliner(object):
+	""" take in html request data, and modify it so that
+		it doesn't have any external references """
+
+	def __init__(self, htmlreq, uri, http):
+		self.uri = uri
+		self.http = http
+		self.soup = BeautifulSoup(htmlreq)
+
+		self.inlimg()
+		self.inlscript()
+		self.inlcss()
 
 
-	def inline(self, htmldata, uri):
-		"""	make the output files much more manageable
-			deficiencies to address are:
-			images hosted elsewhere - become base64 encoded and embedded
-			stylesheets likewise hosted elsewhere - change to style and embedded
-		"""
-		soup = BeautifulSoup(htmldata)
+	def __str__(self):
+		return self.soup.prettify()
 
-		imglist = soup.select('img')
+
+	def getexternalresource(self, uri, path):
+		""" handle arbitrary paths, and return the resource data """
+		absolute = urlparse.urljoin(uri, path)
+		return self.http.req(absolute)
+
+
+	def base64it(self, raw, ref):
+		""" convert a bytestream or xml file into base64 data uri """
+
+		imgtype = imghdr.what('ignored', raw)
+		if imgtype == None:
+			imgtype = ref.split('.').pop()
+			if imgtype == 'svg':
+				imgtype += '+xml'
+
+		img64 = base64.b64encode(raw)
+		return 'data:image/' + imgtype + ';base64,' + img64
+
+
+	def inlimg(self):
+		""" images become base64 encoded as data uris """
+
+		imglist = self.soup.select('img')
 		for img in imglist:
 			if hasattr(img, 'src'):
 				ref = img['src']
@@ -154,50 +220,69 @@ class WebGetter(object):
 				if srcuri.scheme == 'data':
 					continue
 
-				imgraw = self.getexternalresource(ref, uri)
-				imgtype = imghdr.what('ignored', imgraw)
-				img64 = base64.b64encode(imgraw)
-				img['src'] = 'data:image/' + imgtype + ';base64,' + img64
+				imgraw = self.getexternalresource(self.uri, ref)
+				img['src'] = self.base64it(imgraw, ref)
 
 
-		linklist = soup.select('link[rel="stylesheet"]')
-		for link in linklist:
-			if hasattr(link, 'href'):
-				ref = link['href']
-				styles = self.getexternalresource(ref, uri)
+	def inlscript(self):
+		""" get the scripts coming from this domain only
+			we don't care about external libraries """
 
-				del link['rel']
-				del link['href']
-
-				link.name = 'style'
-				link.string = styles
-				link['type'] = 'text/css'
-
-
-		# get the scripts coming from this domain only
-		# we don't care about external libraries
-		domain = urlparse.urlparse(uri).netloc
-		scriptlist = soup.select('script')
+		domain = urlparse.urlparse(self.uri).netloc
+		scriptlist = self.soup.select('script')
 		for script in scriptlist:
 			if hasattr(script, 'src'):
 				ref = script['src']
 				parsedref = urlparse.urlparse(ref)
 				if domain == parsedref.netloc or \
 					parsedref.netloc == '':
-					scriptcontents = self.getexternalresource(ref, uri)
 
+					scriptcontents = self.getexternalresource(self.uri, ref)
 					del script['src']
 					script.string = scriptcontents
 
-		return soup
+
+	def inlcss(self):
+		""" handle @import and url ref
+			handle style attributes with url ref
+			change links with rel stylesheet to style tag """
+
+		linklist = self.soup.select('link[rel="stylesheet"]')
+		for link in linklist:
+			if hasattr(link, 'href'):
+				ref = link['href']
+
+				# fetch the linked stylesheet
+				sty = cssutils.parseUrl(ref)
+				
+				# flatten out any imports into the same stylesheet
+				sty = cssutils.resolveImports(sty)
+
+				# remove any referenced uris
+				cssutils.replaceUrls(sty, cssurihandler)
+
+				# create the new destination style tag
+				newstyle = self.soup.new_tag('style')
+
+				# insert our results
+				newstyle.string = sty.cssText
+
+				# before the old link tag
+				link.insert_before(newstyle) 
+
+				# remove the stylesheet link
+				link.decompose()
+
+		styleattrs = self.soup.select('[style]')
+		for tag in styleattrs:
+			sty = cssutils.parseStyle(tag['style'])
+			sty = cssutils.replaceUrls(sty, cssurihandler)
+			tag['style'] = sty.cssText
 
 
-	def getexternalresource(self, path, uri):
-		"""handle arbitrary paths, and return the resource data"""
-		absolute = urlparse.urljoin(uri, path)
-		req = self.http.request('GET', absolute)
-		if req.status == 200 or req.status == 304: # xxx
-			return req.data
+	def cssurihandler(self, uri):
+		ref = self.getexternalresource(self.uri, uri)
+		return self.base64it(ref, uri)
 
 
 
@@ -223,8 +308,8 @@ class EventHandler(RegexMatchingEventHandler):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser(description='Capture updates to a web site as you edit the files.',
-										epilog='Consider using a & after the command to run it in the background. \
-												Example: python ' + sys.argv[0] + ' <uri> &')
+										epilog='Consider using a & after the command to run it in the background.' \
+												+ '\nExample: ' + sys.argv[0] + ' <uri> &')
 
 	parser.add_argument('-i', '--input', metavar='<dir>', default=os.getcwd(),
 						help='The directory to watch for file changes. Defaults to PWD')
@@ -238,8 +323,8 @@ if __name__ == '__main__':
 
 	args = parser.parse_args()
 
-
-	webgetter = WebGetter(args)
+	httpman = Http()
+	webgetter = WebGetter(args, httpman)
 	eventh = EventHandler(webgetter, args)
 
 	observer = Observer()
@@ -254,4 +339,3 @@ if __name__ == '__main__':
 		observer.stop()
 
 	observer.join()
-
