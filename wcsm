@@ -16,14 +16,15 @@ MIT license.
 
 import argparse
 import base64
+import chardet
 import cssutils
 import hashlib
 import imghdr
 import os
 import re
+import requests
 import sys
 import time
-import urllib3
 import urlparse
 from bs4 import BeautifulSoup
 from os import path as op
@@ -33,7 +34,6 @@ from watchdog.observers import Observer
 
 # TODOS:
 
-# make sure utf8
 # better docs
 # examples
 # logs
@@ -54,16 +54,18 @@ from watchdog.observers import Observer
 
 class Http(object):
 	""" manage the http requests """
-	def __init__(self):
-		self.http = urllib3.PoolManager()
 
 	def req(self, uri):
-		htreq = self.http.request('GET', uri)
-		if htreq.status == 200 or htreq.status == 304:
-			return htreq.data
+		htreq = requests.get(uri)
+		if htreq.status_code == 200:
+			if htreq.encoding == None:
+				enc = chardet.detect(htreq.content)['encoding']
+				return htreq.content.decode(enc).encode('utf-8')
+
+			return htreq.content.decode(htreq.encoding).encode('utf-8')
 		else:
-			raise RunTimeError('Net error:\nStatus: ' + htreq.status + '\n' \
-								 + 'Requested URI: ' + uri)
+			print 'Net error:\nStatus: ' + str(htreq.status_code) + '\n' \
+					 + 'Requested URI: ' + uri
 
 
 
@@ -129,7 +131,7 @@ class WebGetter(object):
 		""" returns a boolean that indicates whether the last
 			file saved has the same hash value as the fetched content """
 
-		thishash = hashlib.md5(flatcontent).hexdigest()
+		thishash = hashlib.md5(flatcontent.encode('utf-8')).hexdigest()
 		oldfiles = os.listdir(checkdir)
 		goahead = False
 
@@ -159,13 +161,13 @@ class WebGetter(object):
 				basepath = op.normpath(self.outdirname + '/' + self.pathfromuri(uri)  + '/')
 
 				req = self.http.req(uri)
-				flat = str(Inliner(req, uri, self.http))
+				flat = Inliner(req, uri, self.http).get()
 
 				if self.checkhash(basepath, flat):
 					uridir = self.pathfromuri(uri)
 					path = self.outdirname + '/' + uridir + '/' + name
 					fhandle = open(op.normpath(path), 'w')
-					fhandle.write(flat)
+					fhandle.write(flat.encode('utf-8'))
 					fhandle.close()
 
 
@@ -184,7 +186,7 @@ class Inliner(object):
 		self.inlcss()
 
 
-	def __str__(self):
+	def get(self):
 		return self.soup.prettify()
 
 
@@ -250,16 +252,16 @@ class Inliner(object):
 		linklist = self.soup.select('link[rel="stylesheet"]')
 		for link in linklist:
 			if hasattr(link, 'href'):
-				ref = link['href']
+				self.ref = link['href']
 
 				# fetch the linked stylesheet
-				sty = cssutils.parseUrl(ref)
+				sty = cssutils.parseUrl(self.ref)
 				
 				# flatten out any imports into the same stylesheet
 				sty = cssutils.resolveImports(sty)
 
 				# remove any referenced uris
-				cssutils.replaceUrls(sty, cssurihandler)
+				cssutils.replaceUrls(sty, self.cssurihandler, ignoreImportRules=True)
 
 				# create the new destination style tag
 				newstyle = self.soup.new_tag('style')
@@ -273,16 +275,22 @@ class Inliner(object):
 				# remove the stylesheet link
 				link.decompose()
 
+		self.ref = None
 		styleattrs = self.soup.select('[style]')
 		for tag in styleattrs:
 			sty = cssutils.parseStyle(tag['style'])
-			sty = cssutils.replaceUrls(sty, cssurihandler)
+			sty = cssutils.replaceUrls(sty, self.cssurihandler)
 			tag['style'] = sty.cssText
 
 
 	def cssurihandler(self, uri):
-		ref = self.getexternalresource(self.uri, uri)
-		return self.base64it(ref, uri)
+		if self.ref == None:
+			base = self.uri
+		else:
+			base = self.ref
+
+		contents = self.getexternalresource(base, uri)
+		return self.base64it(contents, uri)
 
 
 
@@ -313,8 +321,8 @@ if __name__ == '__main__':
 
 	parser.add_argument('-i', '--input', metavar='<dir>', default=os.getcwd(),
 						help='The directory to watch for file changes. Defaults to PWD')
-	parser.add_argument('-o', '--output', metavar='<dir>', default=op.normpath(os.getcwd() + '/wcsm'),
-						help='Output dir for the generated files. Defaults to ./wcsm')
+	parser.add_argument('-o', '--output', metavar='<dir>', default=op.normpath(os.getcwd() + '/output'),
+						help='Output dir for the generated files. Defaults to ./output')
 	parser.add_argument('-r', '--regex', metavar='<regex>', nargs='+', default=[r".*\.(css|js|html|rb|php)$"],
 						help='Add a regex, or list of regexes, to match files to watch for changes. \
 								Defaults to \".*\\.(css|js|html|rb|php)$\"')
