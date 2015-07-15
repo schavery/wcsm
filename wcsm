@@ -166,7 +166,7 @@ class WebGetter(object):
 				if self.checkhash(basepath, flat):
 					uridir = self.pathfromuri(uri)
 					path = self.outdirname + '/' + uridir + '/' + name
-					fhandle = open(op.normpath(path), 'w')
+					fhandle = open(op.normpath(path), 'wb')
 					fhandle.write(flat.encode('utf-8'))
 					fhandle.close()
 
@@ -179,7 +179,7 @@ class Inliner(object):
 	def __init__(self, htmlreq, uri, http):
 		self.uri = uri
 		self.http = http
-		self.soup = BeautifulSoup(htmlreq)
+		self.soup = BeautifulSoup(htmlreq, 'html5lib')
 
 		self.inlimg()
 		self.inlscript()
