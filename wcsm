@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 wcsm stands for Web Change Stop Motion
@@ -25,7 +25,7 @@ import re
 import requests
 import sys
 import time
-import urlparse
+import urllib.parse
 from bs4 import BeautifulSoup
 from os import path as op
 from watchdog.events import RegexMatchingEventHandler
@@ -64,8 +64,8 @@ class Http(object):
 
 			return htreq.content.decode(htreq.encoding).encode('utf-8')
 		else:
-			print 'Net error:\nStatus: ' + str(htreq.status_code) + '\n' \
-					 + 'Requested URI: ' + uri
+			print('Net error:\nStatus: ' + str(htreq.status_code) + '\n' \
+					 + 'Requested URI: ' + uri)
 
 
 
@@ -97,7 +97,7 @@ class WebGetter(object):
 			self.http.req(uri)
 
 		# are we good to go now?
-		print 'Ready to watch...'
+		print('Ready to watch...')
 
 
 	def debounce(self):
@@ -113,7 +113,7 @@ class WebGetter(object):
 	def pathfromuri(self, uri):
 		""" transform the uri into a simple directory name """
 
-		address = urlparse.urlparse(uri)
+		address = urllib.parse.urlparse(uri)
 		base = address.netloc
 
 		if address.path != '':
@@ -192,7 +192,7 @@ class Inliner(object):
 
 	def getexternalresource(self, uri, path):
 		""" handle arbitrary paths, and return the resource data """
-		absolute = urlparse.urljoin(uri, path)
+		absolute = urllib.parse.urljoin(uri, path)
 		return self.http.req(absolute)
 
 
@@ -216,7 +216,7 @@ class Inliner(object):
 		for img in imglist:
 			if hasattr(img, 'src'):
 				ref = img['src']
-				srcuri = urlparse.urlparse(ref)
+				srcuri = urllib.parse.urlparse(ref)
 
 				# test for data uri already
 				if srcuri.scheme == 'data':
@@ -230,12 +230,12 @@ class Inliner(object):
 		""" get the scripts coming from this domain only
 			we don't care about external libraries """
 
-		domain = urlparse.urlparse(self.uri).netloc
+		domain = urllib.parse.urlparse(self.uri).netloc
 		scriptlist = self.soup.select('script')
 		for script in scriptlist:
 			if hasattr(script, 'src'):
 				ref = script['src']
-				parsedref = urlparse.urlparse(ref)
+				parsedref = urllib.parse.urlparse(ref)
 				if domain == parsedref.netloc or \
 					parsedref.netloc == '':
 
@@ -343,7 +343,7 @@ if __name__ == '__main__':
 		while True:
 			time.sleep(1)
 	except KeyboardInterrupt:
-		print '\nCleaning up...'
+		print('\nCleaning up...')
 		observer.stop()
 
 	observer.join()
