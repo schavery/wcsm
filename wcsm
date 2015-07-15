@@ -117,7 +117,12 @@ class WebGetter(object):
 		base = address.netloc
 
 		if address.path != '':
-			path = re.sub('/', '_', address.path)
+			# don't underscore a directory type path
+			if address.path[-1] == '/':
+				path = re.sub('/', '_', address.path[-1])
+			else:
+				path = re.sub('/', '_', address.path)
+
 			base += path
 
 		if address.query != '':
