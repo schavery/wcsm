@@ -119,7 +119,7 @@ class WebGetter(object):
 		if address.path != '':
 			# don't underscore a directory type path
 			if address.path[-1] == '/':
-				path = re.sub('/', '_', address.path[-1])
+				path = re.sub('/', '_', address.path[:-1])
 			else:
 				path = re.sub('/', '_', address.path)
 
