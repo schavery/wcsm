@@ -36,6 +36,7 @@ from watchdog.observers import Observer
 
 # better docs
 # examples
+# second level of verbose? print out inliner info
 # logs
 # some changes are invisible; want to throw these away
 # python-dev on ubuntu
@@ -78,6 +79,7 @@ class WebGetter(object):
 		self.debounce_interval = 1000
 		self.thistime = 0
 		self.lasttime = 0
+		self.debug = options.verbose
 
 		# no duplicate uris
 		uniqueset = set(options.fetch)
@@ -160,20 +162,47 @@ class WebGetter(object):
 			as well as preventing too frequent requests and
 			superfluous output """
 
-		if self.debounce():
-			name = str(time.time()).split('.')[0] + '.html'
-			for uri in self.urilist:
-				basepath = op.normpath(self.outdirname + '/' + self.pathfromuri(uri)  + '/')
+		if self.verbose:
+			if self.debounce():
+				name = str(time.time()).split('.')[0] + '.html'
+				for uri in self.urilist:
+					basepath = op.normpath(self.outdirname + '/' + self.pathfromuri(uri)  + '/')
 
-				req = self.http.req(uri)
-				flat = Inliner(req, uri, self.http).get()
+					req = self.http.req(uri)
+					print('Fetching', uri)
 
-				if self.checkhash(basepath, flat):
-					uridir = self.pathfromuri(uri)
-					path = self.outdirname + '/' + uridir + '/' + name
-					fhandle = open(op.normpath(path), 'wb')
-					fhandle.write(flat.encode('utf-8'))
-					fhandle.close()
+					flat = Inliner(req, uri, self.http).get()
+
+					if self.checkhash(basepath, flat):
+						uridir = self.pathfromuri(uri)
+						path = self.outdirname + '/' + uridir + '/' + name
+						fhandle = open(op.normpath(path), 'wb')
+						fhandle.write(flat.encode('utf-8'))
+						fhandle.close()
+						print('Wrote', path)
+					else:
+						print('Not writing, hash matches last written file')
+
+			else:
+				print('Not fetching because we fetched within the last second.')
+
+			print('Waiting...')
+
+		else:
+			if self.debounce():
+				name = str(time.time()).split('.')[0] + '.html'
+				for uri in self.urilist:
+					basepath = op.normpath(self.outdirname + '/' + self.pathfromuri(uri)  + '/')
+
+					req = self.http.req(uri)
+					flat = Inliner(req, uri, self.http).get()
+
+					if self.checkhash(basepath, flat):
+						uridir = self.pathfromuri(uri)
+						path = self.outdirname + '/' + uridir + '/' + name
+						fhandle = open(op.normpath(path), 'wb')
+						fhandle.write(flat.encode('utf-8'))
+						fhandle.close()
 
 
 
@@ -323,6 +352,8 @@ if __name__ == '__main__':
 	parser = argparse.ArgumentParser(description='Capture updates to a web site as you edit the files.',
 										epilog='Consider using a & after the command to run it in the background.' \
 												+ '\nExample: ' + sys.argv[0] + ' <uri> &')
+	parser.add_argument('-v', '--verbose', action='store_true',
+						help='Print lots of extra info')
 
 	parser.add_argument('-i', '--input', metavar='<dir>', default=os.getcwd(),
 						help='The directory to watch for file changes. Defaults to PWD')
@@ -333,6 +364,7 @@ if __name__ == '__main__':
 								Defaults to \".*\\.(css|js|html|rb|php)$\"')
 	parser.add_argument('fetch', metavar='<uri>', nargs='+',
 						help='Add uris to fetch changes from.')
+
 
 	args = parser.parse_args()
 
