@@ -143,8 +143,8 @@ class WebGetter(object):
 		if len(oldfiles) > 0:
 			oldfiles.sort()
 			mostrecent = oldfiles[-1]
-			fcontents = open(op.normpath(checkdir + '/' + mostrecent), 'r')
-			pasthash = hashlib.md5(fcontents.read()).hexdigest()
+			fcontents = open(op.normpath(checkdir + '/' + mostrecent), 'rb')
+			pasthash = hashlib.md5(fcontents.read().encode('utf-8')).hexdigest()
 			if pasthash != thishash:
 				goahead = True
 		else:
