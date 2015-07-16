@@ -162,7 +162,7 @@ class WebGetter(object):
 			as well as preventing too frequent requests and
 			superfluous output """
 
-		if self.verbose:
+		if self.debug:
 			if self.debounce():
 				name = str(time.time()).split('.')[0] + '.html'
 				for uri in self.urilist:
