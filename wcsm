@@ -243,8 +243,7 @@ class Inliner(object):
 			if imgtype == 'svg':
 				imgtype += '+xml'
 
-		img64 = base64.b64encode(raw)
-		return 'data:image/' + imgtype + ';base64,' + img64
+		return 'data:image/' + imgtype + ';base64,' + str(img64)
 
 
 	def inlimg(self):
@@ -329,8 +328,7 @@ class Inliner(object):
 		else:
 			base = self.ref
 
-		contents = self.getexternalresource(base, uri)
-		return self.base64it(contents, uri)
+		return self.getexternalresource(base, uri)
 
 
 
