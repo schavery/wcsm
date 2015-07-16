@@ -61,7 +61,11 @@ class Http(object):
 		if htreq.status_code == 200:
 			if htreq.encoding == None:
 				enc = chardet.detect(htreq.content)['encoding']
-				return htreq.content.decode(enc).encode('utf-8')
+				if enc != None:
+					return htreq.content.decode(enc).encode('utf-8')
+				else:
+					# give up
+					return htreq.content
 
 			return htreq.content.decode(htreq.encoding).encode('utf-8')
 		else:
