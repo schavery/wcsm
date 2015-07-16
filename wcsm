@@ -267,8 +267,8 @@ class Inliner(object):
 		domain = urllib.parse.urlparse(self.uri).netloc
 		scriptlist = self.soup.select('script')
 		for script in scriptlist:
-			if hasattr(script, 'src'):
-				ref = script['src']
+			try:
+				ref = getattr(script, 'src')
 				parsedref = urllib.parse.urlparse(ref)
 				if domain == parsedref.netloc or \
 					parsedref.netloc == '':
@@ -276,6 +276,8 @@ class Inliner(object):
 					scriptcontents = self.getexternalresource(self.uri, ref)
 					del script['src']
 					script.string = scriptcontents
+			except AttributeError:
+				pass
 
 
 	def inlcss(self):
