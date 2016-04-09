@@ -18,17 +18,19 @@ import argparse
 import base64
 import chardet
 import cssutils
+import glob
 import hashlib
 import imghdr
+import logging
 import os
 import re
 import requests
 import sys
 import time
-import urllib.parse
-import logging
+
 from bs4 import BeautifulSoup
 from os import path as op
+from urllib.parse import urlsplit, urlunsplit, urljoin
 from watchdog.events import RegexMatchingEventHandler
 from watchdog.observers import Observer
 
@@ -39,7 +41,6 @@ from watchdog.observers import Observer
 # examples
 # second level of verbose? print out inliner info
 # some changes are invisible; want to throw these away
-# handle no protocol
 # do initial get before change caught, but only when no file yet exists?
 
 
@@ -64,7 +65,10 @@ class Http(object):
 			if htreq.encoding == None:
 				enc = chardet.detect(htreq.content)['encoding']
 				if enc != None:
-					return htreq.content.decode(enc).encode('utf-8')
+					try:
+						return htreq.content.decode(enc).encode('utf-8')
+					except UnicodeDecodeError:
+						return htreq.content
 				else:
 					# give up
 					return htreq.content
@@ -77,7 +81,7 @@ class Http(object):
 
 
 class WebGetter(object):
-	""" fetch the contents of a url using WebGetter.grab() """
+	""" fetch the contents of a url using WebGetter.graball() """
 
 	def __init__(self, options, http):
 		# set up debounce interval in millis
@@ -94,6 +98,7 @@ class WebGetter(object):
 		# find or create directories for output
 		self.outdirname = op.abspath(options.output)
 		for uri in self.urilist:
+
 			name = self.pathfromuri(uri)
 			outpath = op.normpath(self.outdirname + '/' + name)
 			if not op.exists(outpath):
@@ -101,8 +106,23 @@ class WebGetter(object):
 
 		# prepare urls for fetching.
 		self.http = http
+
+		# make sure we have a net scheme
+		newlist = []
 		for uri in self.urilist:
-			self.http.req(uri)
+			if urlsplit(uri).scheme == '':
+				newlist.append('http://' + uri)
+			else:
+				newlist.append(uri)
+
+		self.urilist = newlist
+
+		# check for any existing files and populate the initial version of the uris
+		for uri in self.urilist:
+			uri_dir = op.normpath(self.outdirname + '/' + self.pathfromuri(uri))
+			if os.listdir(uri_dir) == []:
+				self.grabone(uri)
+
 
 		# are we good to go now?
 		print('Ready to watch...')
@@ -117,19 +137,26 @@ class WebGetter(object):
 		else:
 			return False
 
-
-	def pathfromuri(self, uri):
+	@staticmethod
+	def pathfromuri(uri):
 		""" transform the uri into a simple directory name """
 
-		address = urllib.parse.urlparse(uri)
+		address = urlsplit(uri)
 		base = address.netloc
 
 		if address.path != '':
-			# don't underscore a directory type path
-			if address.path[-1] == '/':
-				path = re.sub('/', '_', address.path[:-1])
+
+			# remove first slash
+			if base == '' and address.path[0:1] == '/':
+				path = address.path[1:]
 			else:
-				path = re.sub('/', '_', address.path)
+				path = address.path
+
+			# don't underscore a directory type path
+			if path[-1] == '/':
+				path = re.sub('/', '_', path[:-1])
+			else:
+				path = re.sub('/', '_', path)
 
 			base += path
 
@@ -145,7 +172,7 @@ class WebGetter(object):
 			file saved has the same hash value as the fetched content """
 
 		thishash = hashlib.md5(flatcontent.encode('utf-8')).hexdigest()
-		oldfiles = os.listdir(checkdir)
+		oldfiles = [f for f in os.listdir(checkdir) if op.isfile(f)]
 		goahead = False
 
 		if len(oldfiles) > 0:
@@ -162,7 +189,27 @@ class WebGetter(object):
 		return goahead
 
 
-	def grab(self):
+	def grabone(self, uri):
+		name = str(time.time()).split('.')[0] + '.html'
+		basepath = op.normpath(self.outdirname + '/' + WebGetter.pathfromuri(uri)  + '/')
+
+		req = self.http.req(uri)
+		print('Fetching', uri)
+
+		flat = Inliner(req, uri, self.http, self.outdirname).get()
+
+		if self.checkhash(basepath, flat):
+			uridir = WebGetter.pathfromuri(uri)
+			path = self.outdirname + '/' + uridir + '/' + name
+			fhandle = open(op.normpath(path), 'wb')
+			fhandle.write(flat.encode('utf-8'))
+			fhandle.close()
+			print('Wrote', path)
+		else:
+			print('Not writing, hash matches last written file')
+
+
+	def graball(self):
 		""" handles the logic of grabbing a webpage
 			and flattening it to a single file,
 			as well as preventing too frequent requests and
@@ -170,25 +217,9 @@ class WebGetter(object):
 
 		if self.debug:
 			if self.debounce():
-				name = str(time.time()).split('.')[0] + '.html'
 				for uri in self.urilist:
-					basepath = op.normpath(self.outdirname + '/' + self.pathfromuri(uri)  + '/')
-
-					req = self.http.req(uri)
-					print('Fetching', uri)
-
-					flat = Inliner(req, uri, self.http).get()
-
-					if self.checkhash(basepath, flat):
-						uridir = self.pathfromuri(uri)
-						path = self.outdirname + '/' + uridir + '/' + name
-						fhandle = open(op.normpath(path), 'wb')
-						fhandle.write(flat.encode('utf-8'))
-						fhandle.close()
-						print('Wrote', path)
-					else:
-						print('Not writing, hash matches last written file')
-
+					self.grabone(uri)
+					
 			else:
 				print('Not fetching because we fetched within the last second.')
 
@@ -198,13 +229,13 @@ class WebGetter(object):
 			if self.debounce():
 				name = str(time.time()).split('.')[0] + '.html'
 				for uri in self.urilist:
-					basepath = op.normpath(self.outdirname + '/' + self.pathfromuri(uri)  + '/')
+					basepath = op.normpath(self.outdirname + '/' + WebGetter.pathfromuri(uri)  + '/')
 
 					req = self.http.req(uri)
 					flat = Inliner(req, uri, self.http).get()
 
 					if self.checkhash(basepath, flat):
-						uridir = self.pathfromuri(uri)
+						uridir = WebGetter.pathfromuri(uri)
 						path = self.outdirname + '/' + uridir + '/' + name
 						fhandle = open(op.normpath(path), 'wb')
 						fhandle.write(flat.encode('utf-8'))
@@ -216,10 +247,11 @@ class Inliner(object):
 	""" take in html request data, and modify it so that
 		it doesn't have any external references """
 
-	def __init__(self, htmlreq, uri, http):
+	def __init__(self, htmlreq, uri, http, outputdir):
 		self.uri = uri
 		self.http = http
-		self.soup = BeautifulSoup(htmlreq, 'html5lib')
+		self.soup = BeautifulSoup(htmlreq, 'lxml')
+		self.outputdir = outputdir
 
 		self.inlimg()
 		self.inlscript()
@@ -232,7 +264,7 @@ class Inliner(object):
 
 	def getexternalresource(self, uri, path):
 		""" handle arbitrary paths, and return the resource data """
-		absolute = urllib.parse.urlparse.urljoin(uri, path)
+		absolute = urljoin(uri, path)
 		return self.http.req(absolute)
 
 
@@ -246,7 +278,7 @@ class Inliner(object):
 				imgtype += '+xml'
 		
 		img64 = base64.b64encode(raw)
-		return 'data:image/' + imgtype + ';base64,' + str(img64)
+		return 'data:image/' + imgtype + ';base64,' + img64.decode('ascii')
 
 
 	def inlimg(self):
@@ -256,7 +288,7 @@ class Inliner(object):
 		for img in imglist:
 			if hasattr(img, 'src'):
 				ref = img['src']
-				srcuri = urllib.parse.urlparse(ref)
+				srcuri = urlsplit(ref)
 
 				# test for data uri already
 				if srcuri.scheme == 'data':
@@ -270,12 +302,12 @@ class Inliner(object):
 		""" get the scripts coming from this domain only
 			we don't care about external libraries """
 
-		domain = urllib.parse.urlparse(self.uri).netloc
+		domain = urlsplit(self.uri).netloc
 		scriptlist = self.soup.select('script')
 		for script in scriptlist:
 			try:
 				ref = getattr(script, 'src')
-				parsedref = urllib.parse.urlparse(ref)
+				parsedref = urlsplit(ref)
 				if domain == parsedref.netloc \
 					or parsedref.netloc == '':
 
@@ -294,7 +326,7 @@ class Inliner(object):
 		cssutils.log.setLevel(logging.FATAL)
 
 		linklist = self.soup.select('link[rel="stylesheet"]')
-		domain = urllib.parse.urlparse(self.uri).netloc
+		domain = urlsplit(self.uri).netloc
 
 		for link in linklist:
 			if hasattr(link, 'href'):
@@ -303,7 +335,7 @@ class Inliner(object):
 				print('Fetching CSS from', self.ref)
 
 				# make sure its a local stylesheet
-				hrefdomain = urllib.parse.urlparse(self.ref).netloc
+				hrefdomain = urlsplit(self.ref).netloc
 				if domain == hrefdomain \
 					or hrefdomain == '':
 
@@ -321,13 +353,16 @@ class Inliner(object):
 					newstyle = self.soup.new_tag('style')
 
 					# insert our results
-					newstyle.string = sty.cssText
+					newstyle.string = sty.cssText.decode()
 
 					# before the old link tag
 					link.insert_before(newstyle) 
 
 					# remove the stylesheet link
 					link.decompose()
+
+				else:
+					print('Not fetching external CSS')
 
 		self.ref = None
 		styleattrs = self.soup.select('[style]')
@@ -338,12 +373,83 @@ class Inliner(object):
 
 
 	def cssurihandler(self, uri):
+		""" take a url() from some css and replace the url with a path to
+			a local resource """
+
+		# ref is the path from which we need to normalize the uri
 		if self.ref == None:
 			base = self.uri
 		else:
 			base = self.ref
 
-		return self.getexternalresource(base, uri)
+		# we can limit this to only onsite resources, as usual.
+		parsed_url = urlsplit(urljoin(base, uri))
+		hrefdomain = parsed_url.netloc
+
+		if urlsplit(self.uri).netloc == hrefdomain or hrefdomain == '':
+			file_resource = self.getexternalresource(parsed_url.geturl(), '')
+			md5_file_resource = hashlib.md5(file_resource).hexdigest()
+
+			# split into path and extension
+			parsed_path = op.splitext(parsed_url.path)
+			server_path = parsed_path[0]
+		
+			# path in which we will try to match for versions of this filename
+			# but only with the same file extension
+			resource_folder = op.normpath(self.outputdir + '/' + WebGetter.pathfromuri(self.uri) + '/res/')
+			search_path = resource_folder + WebGetter.pathfromuri(server_path) + '*' + parsed_path[1][1:]
+
+			# get a potentially empty list of matches
+			potential_matches = glob.iglob(search_path)
+
+			# a flag for determining whether we need to save this file or not
+			file_match_found = False
+			file_match_count = 0
+
+			for file_match in potential_matches:
+				file_match_contents = open(file_match, 'rb')
+				file_match_count += 1
+
+				if hashlib.md5(file_match_contents.read()).hexdigest() == md5_file_resource:
+					# we have found a matching resource file
+					file_match_contents.close()
+					file_match_found = True
+					break
+				else:
+					file_match_contents.close()
+
+			if file_match_found:
+				# convert file_match path to relative url and return it
+				return op.relpath(op.normpath(resource_folder + '/' + file_match), start=self.outputdir)
+			else:
+				if file_match_count == 0:
+					# filename does not need a version indicator
+					full_path = op.normpath(resource_folder + '/' + WebGetter.pathfromuri(parsed_url.path))
+					
+				else:
+					# filename is filepath.<file_match_count>.extension
+					full_path = op.normpath(
+							resource_folder
+							+ '/'
+							+ WebGetter.pathfromuri(server_path)
+							+ '.'
+							+ str(file_match_count + 1)
+							+ parsed_path[1]) # includes the .
+
+
+				# save file contents and return relative path
+				if not op.exists(resource_folder):
+					os.makedirs(resource_folder)
+
+				fhandle = open(full_path, 'wb')
+				fhandle.write(file_resource)
+				fhandle.close()
+				relative_path = op.relpath(full_path, start=op.normpath(resource_folder + '/..'))
+				return relative_path
+
+		else:
+			# the reference is external, so just use the existing uri
+			return uri
 
 
 
@@ -363,7 +469,7 @@ class EventHandler(RegexMatchingEventHandler):
 			else:
 				return
 
-		self.webgetter.grab()
+		self.webgetter.graball()
 
 
 
