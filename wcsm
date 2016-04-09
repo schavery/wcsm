@@ -347,7 +347,7 @@ class Inliner(object):
 					sty = cssutils.resolveImports(sty)
 
 					# remove any referenced uris
-					cssutils.replaceUrls(sty, self.cssurihandler, ignoreImportRules=True)
+					cssutils.replaceUrls(sty, self.cssurihandler)
 
 					# create the new destination style tag
 					newstyle = self.soup.new_tag('style')
